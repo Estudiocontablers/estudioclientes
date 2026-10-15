@@ -1,0 +1,369 @@
+import io
+import os
+import pandas as pd
+import streamlit as st
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+
+# Configuración inicial de la página
+st.set_page_config(
+    page_title="RS Estudio Contable - Sistema Integral",
+    page_icon="📊",
+    layout="wide",
+)
+
+st.title("📊 RS Estudio Contable - Generador de Informes Mensuales")
+st.markdown(
+    "Sistema de gestión, control fiscal, informes y cotización para clientes."
+)
+
+# --- BARRA LATERAL: DATOS DEL ESTUDIO Y CLIENTE ---
+st.sidebar.header("⚙️ Configuración del Informe")
+cliente_nombre = st.sidebar.text_input(
+    "Razón Social / Nombre del Cliente", "Empresa Ejemplo S.R.L."
+)
+cliente_cuit = st.sidebar.text_input("CUIT", "30-12345678-9")
+periodo = st.sidebar.selectbox(
+    "Período del Informe",
+    [
+        "Septiembre 2026",
+        "Agosto 2026",
+        "Julio 2026",
+        "Junio 2026",
+        "Mayo 2026",
+        "Abril 2026",
+    ],
+)
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("👨‍💼 Datos del Profesional")
+contador_nombre = st.sidebar.text_input("Contador Público", "José Rapuzzi")
+contador_matricula = st.sidebar.text_input(
+    "Matrícula Profesional", "Mat. CPCEER X - Folio XX"
+)
+
+# --- PESTAÑAS PRINCIPALES ---
+tab_informe, tab_cotizador, tab_plantillas = st.tabs(
+    ["📄 Informe Mensual & PDF", "💰 Cotizador de Honorarios", "📂 Plantillas utiles"]
+)
+
+with tab_informe:
+  st.header("1. Carga de Números del Mes")
+
+  col1, col2 = st.columns(2)
+  with col1:
+    ingresos = st.number_input(
+        "Facturación / Ingresos Totales ($)", min_value=0.0, value=5000000.0, step=10000.0
+    )
+    costos_fijos = st.number_input(
+        "Costos Fijos ($) (Alquiler, sueldos, abonos)",
+        min_value=0.0,
+        value=1500000.0,
+        step=10000.0,
+    )
+  with col2:
+    costos_variables = st.number_input(
+        "Costos Variables ($) (Mercadería, comisiones, impuestos s/ventas)",
+        min_value=0.0,
+        value=2000000.0,
+        step=10000.0,
+    )
+    ipc_mes = st.number_input(
+        "Inflación IPC del Mes (%)", min_value=-10.0, value=3.5, step=0.1
+    )
+
+  st.markdown("---")
+  st.header("2. Control de Monotributo (Parámetros Anuales)")
+  ingresos_12m = st.number_input(
+      "Ingresos acumulados últimos 12 meses ($)",
+      min_value=0.0,
+      value=35000000.0,
+      step=50000.0,
+  )
+  tope_categoria = st.number_input(
+      "Tope de la Categoría Actual ($)",
+      min_value=0.0,
+      value=45000000.0,
+      step=50000.0,
+  )
+
+  # --- CÁLCULOS AUTOMÁTICOS ---
+  resultado_operativo = ingresos - (costos_fijos + costos_variables)
+  margen_operativo = (resultado_operativo / ingresos * 100) if ingresos > 0 else 0
+  # Margen de contribución aproximado para punto de equilibrio
+  contribucion_marginal = (
+      (ingresos - costos_variables) / ingresos if ingresos > 0 else 1
+  )
+  punto_equilibrio = (
+      costos_fijos / contribucion_marginal if contribucion_marginal > 0 else 0
+  )
+
+  # Ajuste por IPC
+  ingresos_reales_ipc = ingresos / (1 + (ipc_mes / 100))
+
+  # Monotributo porcentaje
+  porcentaje_monotributo = (
+      (ingresos_12m / tope_categoria * 100) if tope_categoria > 0 else 0
+  )
+
+  st.markdown("---")
+  st.subheader("📊 Resultados Preliminares del Mes")
+  m1, m2, m3, m4 = st.columns(4)
+  m1.metric("Resultado Neto", f"${resultado_operativo:,.2f}")
+  m2.metric("Margen Operativo", f"{margen_operativo:.1f}%")
+  m3.metric("Punto de Equilibrio", f"${punto_equilibrio:,.2f}")
+  m4.metric(
+      "Uso del Tope Monotributo",
+      f"{porcentaje_monotributo:.1f}%",
+      delta="Alerta Alta" if porcentaje_monotributo > 80 else "Normal",
+      delta_color="inverse" if porcentaje_monotributo > 80 else "normal",
+  )
+
+  st.markdown("---")
+  st.header("3. Redacción de Recomendaciones Estratégicas")
+  rec_1 = st.text_area(
+      "Recomendación 1 (Ej: Control de precios / Margen)",
+      "El margen operativo se mantiene saludable, pero se sugiere revisar los costos variables de insumos para mitigar el impacto inflacionario.",
+  )
+  rec_2 = st.text_area(
+      "Recomendación 2 (Ej: Situación Fiscal / Monotributo)",
+      f"Te encuentras utilizando el {porcentaje_monotributo:.1f}% del límite de tu categoría. Monitorear la facturación de los próximos meses ante una posible recategorización.",
+  )
+  rec_3 = st.text_area(
+      "Recomendación 3 (Ej: Liquidez y Flujo de Caja)",
+      "Se aconseja mantener una reserva líquida en moneda dura o instrumentos de liquidez inmediata para afrontar las obligaciones fiscales del próximo vencimiento unificado.",
+  )
+
+
+  # --- FUNCIÓN DE GENERACIÓN DE PDF ---
+  def generar_pdf():
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=letter,
+        rightMargin=40,
+        leftMargin=40,
+        topMargin=40,
+        bottomMargin=40,
+    )
+    elements = []
+    styles = getSampleStyleSheet()
+
+    # Estilos personalizados
+    titulo_style = ParagraphStyle(
+        'TitleStyle',
+        parent=styles['Heading1'],
+        fontSize=18,
+        textColor=colors.HexColor('#1E3A8A'),
+        spaceAfter=6,
+    )
+    sub_style = ParagraphStyle(
+        'SubStyle',
+        parent=styles['Normal'],
+        fontSize=10,
+        textColor=colors.HexColor('#4B5563'),
+        spaceAfter=15,
+    )
+    section_style = ParagraphStyle(
+        'SectionStyle',
+        parent=styles['Heading2'],
+        fontSize=13,
+        textColor=colors.HexColor('#1F2937'),
+        spaceBefore=12,
+        spaceAfter=6,
+    )
+    body_style = ParagraphStyle(
+        'BodyStyle', parent=styles['Normal'], fontSize=10, leading=14
+    )
+
+    # Encabezado
+    elements.append(
+        Paragraph('RS ESTUDIO CONTABLE — INFORME DE GESTIÓN MENSUAL', titulo_style)
+    )
+    elements.append(
+        Paragraph(
+            f'<b>Cliente:</b> {cliente_nombre} | <b>CUIT:</b> {cliente_cuit} | <b>Período:</b> {periodo}',
+            sub_style,
+        )
+    )
+    elements.append(
+        Paragraph(
+            '_________________________________________________________________________________',
+            sub_style,
+        )
+    )
+
+    # Tabla de Resultados
+    elements.append(Paragraph('1. Resumen Económico y Financiero', section_style))
+    data_resumen = [
+        ['Concepto', 'Importe ($)'],
+        ['Ingresos Totales', f'${ingresos:,.2f}'],
+        ['Costos Fijos', f'${costos_fijos:,.2f}'],
+        ['Costos Variables', f'${costos_variables:,.2f}'],
+        ['Resultado Operativo Neto', f'${resultado_operativo:,.2f}'],
+        ['Punto de Equilibrio', f'${punto_equilibrio:,.2f}'],
+        [
+            f'Ingresos Ajustados por IPC ({ipc_mes}%)',
+            f'${ingresos_reales_ipc:,.2f}',
+        ],
+    ]
+    t = Table(data_resumen, colWidths=[250, 200])
+    t.setStyle(
+        TableStyle([
+            ('BACKGROUND', (0, 0), (1, 0), colors.HexColor('#1E3A8A')),
+            ('TEXTCOLOR', (0, 0), (1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#F9FAFB')),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#D1D5DB')),
+        ])
+    )
+    elements.append(t)
+    elements.append(Spacer(1, 10))
+
+    # Control Monotributo
+    elements.append(Paragraph('2. Control de Parámetros Fiscales', section_style))
+    estado_mono = (
+        '⚠️ Alerta: Cerca o superando el límite'
+        if porcentaje_monotributo > 80
+        else '✅ Parámetros Normales'
+    )
+    data_mono = [
+        ['Parámetro Monotributo', 'Valor Actual'],
+        ['Facturación Acumulada 12 meses', f'${ingresos_12m:,.2f}'],
+        ['Tope de Categoría Actual', f'${tope_categoria:,.2f}'],
+        ['Utilización de Escala', f'{porcentaje_monotributo:.1f}% ({estado_mono})'],
+    ]
+    t_mono = Table(data_mono, colWidths=[250, 200])
+    t_mono.setStyle(
+        TableStyle([
+            ('BACKGROUND', (0, 0), (1, 0), colors.HexColor('#374151')),
+            ('TEXTCOLOR', (0, 0), (1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#F9FAFB')),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#D1D5DB')),
+        ])
+    )
+    elements.append(t_mono)
+    elements.append(Spacer(1, 10))
+
+    # Recomendaciones
+    elements.append(
+        Paragraph('3. Recomendaciones Profesionales del Estudio', section_style)
+    )
+    elements.append(Paragraph(f'• <b>1.</b> {rec_1}', body_style))
+    elements.append(Spacer(1, 4))
+    elements.append(Paragraph(f'• <b>2.</b> {rec_2}', body_style))
+    elements.append(Spacer(1, 4))
+    elements.append(Paragraph(f'• <b>3.</b> {rec_3}', body_style))
+    elements.append(Spacer(1, 30))
+
+    # Firma y Matrícula
+    data_firma = [
+        ['______________________________________', ''],
+        [f'<b>{contador_nombre}</b>', ''],
+        [f'Contador Público - {contador_matricula}', ''],
+        ['RS Estudio Contable', ''],
+    ]
+    t_firma = Table(data_firma, colWidths=[250, 200])
+    t_firma.setStyle(
+        TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+        ])
+    )
+    elements.append(t_firma)
+
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
+
+
+  st.markdown('---')
+  if st.button(
+      '📥 Generar y Descargar Informe en PDF',
+      type='primary',
+      use_container_width=True,
+  ):
+    pdf_buffer = generar_pdf()
+    st.success(
+        '¡Informe generado con éxito! Haz clic en el botón de abajo para'
+        ' descargarlo.'
+    )
+    st.download_button(
+        label='⬇️ Descargar PDF Oficial con Firma',
+        data=pdf_buffer,
+        file_name=f'Informe_Mensual_{cliente_nombre.replace(" ", "_")}_{periodo.replace(" ", "_")}.pdf',
+        mime='application/pdf',
+        use_container_width=True,
+    )
+
+with tab_cotizador:
+  st.header("💰 Cotizador Automático de Honorarios Profesionales")
+  st.markdown(
+      "Calcula el valor sugerido de tu abono mensual según la complejidad del"
+      " cliente."
+  )
+
+  c_emp = st.number_input(
+      "Cantidad de Empleados", min_value=0, max_value=100, value=3
+  )
+  c_asientos = st.slider(
+      "Volumen estimado de asientos/facturas mensuales", 10, 500, 80
+  )
+  regimen_cotiz = st.selectbox(
+      "Régimen Fiscal", ["Monotributo", "Responsable Inscripto", "Sociedad (S.R.L. / S.A.)"]
+  )
+
+  # Fórmula base de cotización
+  base = 45000
+  honorario_sugerido = (
+      base
+      + (c_emp * 12000)
+      + (c_asientos * 800)
+      + (
+          30000
+          if regimen_cotiz == 'Responsable Inscripto'
+          else (70000 if regimen_cotiz == 'Sociedad (S.R.L. / S.A.)' else 0)
+      )
+  )
+
+  st.info(
+      f'### Honorario Mensual Sugerido: **${honorario_sugerido:,.2f} ARS**'
+  )
+
+with tab_plantillas:
+  st.header("📂 Repositorio de Plantillas (+150 Modelos)")
+  st.markdown(
+      'Busca y copia rápidamente minutas, contratos, cartas documento o notas'
+      ' para ARCA / ATER.'
+  )
+
+  busqueda = st.text_input(
+      '🔍 Buscar plantilla por palabra clave (ej: locación, descargo, moratoria):'
+  )
+
+  plantillas_ejemplo = {
+      'Modelo de Contestación a Requerimiento ARCA': (
+          'De mi mayor consideración:\nPor medio de la presente me dirijo a'
+          ' vuestra dependencia a fin de dar respuesta al requerimiento CUIT...'
+      ),
+      'Modelo de Contrato de Locación Comercial': (
+          'CONTRATO DE LOCACIÓN COMERCIAL\nEntre los firmantes se conviene...'
+      ),
+      'Nota de Solicitud de Plan de Pagos ATER': (
+          'Señor Director de ATER:\nSolicito se me incluya en el plan de'
+          ' facilidades de pago...'
+      ),
+  }
+
+  for titulo, contenido in plantillas_ejemplo.items():
+    if not busqueda or busqueda.lower() in titulo.lower():
+      with st.expander(titulo):
+        st.text_area('Contenido editable / Para copiar:', value=contenido, height=100)
